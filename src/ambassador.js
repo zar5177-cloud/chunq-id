@@ -6,11 +6,11 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const root = document.querySelector("#ambassador-app");
 
 const levels = [
-  { level: 0, label: "incoming", min: 0 },
-  { level: 1, label: "signal", min: 25 },
-  { level: 2, label: "sample eligible", min: 60 },
-  { level: 3, label: "core", min: 150 },
-  { level: 4, label: "archive", min: 300 },
+  { level: 0, label: "starter", min: 0 },
+  { level: 1, label: "active", min: 25 },
+  { level: 2, label: "product eligible", min: 60 },
+  { level: 3, label: "advanced", min: 150 },
+  { level: 4, label: "elite", min: 300 },
 ];
 
 const esc = (value = "") =>
@@ -42,7 +42,7 @@ function shell(content, member) {
       <a class="wordmark" href="/">chunq</a>
       <div class="topmeta">
         <span>AMBASSADOR NETWORK</span>
-        <span>${member ? `FILE ${esc(member.invite?.invite_code || "UNLINKED")}` : "AUTH REQUIRED"}</span>
+        <span>${member ? `MEMBER ${esc(member.invite?.invite_code || "UNLINKED")}` : "SIGN IN REQUIRED"}</span>
       </div>
       <nav>
         <a href="/">world</a>
@@ -61,11 +61,11 @@ function shell(content, member) {
 function renderAuthRequired() {
   shell(`
     <main class="gate">
-      <p class="eyebrow">FILE RETURNED / NO ACTIVE SESSION</p>
-      <h1>this room only opens<br>after your ID exists.</h1>
-      <p>Create or sign into your chunq ID using the exact email that received the acceptance file. The invitation attaches itself automatically.</p>
-      <a class="primary-link" href="/auth">open access gate →</a>
-      <p class="micro">If you already registered under another email, do not make a duplicate account. Reply to the acceptance email.</p>
+      <p class="eyebrow">AMBASSADOR SIGN IN</p>
+      <h1>your tasks and<br>rewards are waiting.</h1>
+      <p>Sign in or create your chunq ID using the same email that received your acceptance. Your ambassador account will connect automatically.</p>
+      <a class="primary-link" href="/auth">sign in or register →</a>
+      <p class="micro">Already registered with a different email? Reply to your acceptance email and we will connect it for you.</p>
     </main>
   `);
 }
@@ -73,10 +73,10 @@ function renderAuthRequired() {
 function renderUnlinked(email) {
   shell(`
     <main class="gate">
-      <p class="eyebrow">MEMBER RECORD / NOT FOUND</p>
-      <h1>the ID exists.<br>the file does not recognize it.</h1>
-      <p>Signed in as <span class="mono">${esc(email)}</span>. Ambassador files only attach to the exact address that received the acceptance message.</p>
-      <a class="primary-link" href="mailto:zach.relich@chunqwear.com?subject=ambassador%20file%20link%20problem">report the mismatch →</a>
+      <p class="eyebrow">ACCOUNT NOT CONNECTED</p>
+      <h1>you are signed in.<br>let’s connect your account.</h1>
+      <p>Signed in as <span class="mono">${esc(email)}</span>. Your ambassador account connects to the exact email that received your acceptance.</p>
+      <a class="primary-link" href="mailto:zach.relich@chunqwear.com?subject=ambassador%20account%20connection">get help connecting it →</a>
       <p class="micro">Include your chosen username. Do not send a password.</p>
     </main>
   `);
@@ -103,11 +103,11 @@ function taskCard(task, submissions) {
       <dl>
         <div><dt>proof</dt><dd>${esc(task.proof_required)}</dd></div>
         <div><dt>frequency</dt><dd>${esc(limit)}</dd></div>
-        <div><dt>latest</dt><dd>${latest ? `${esc(latest.status)} / ${date(latest.submitted_at)}` : "nothing filed"}</dd></div>
+        <div><dt>latest</dt><dd>${latest ? `${esc(latest.status)} / ${date(latest.submitted_at)}` : "not submitted yet"}</dd></div>
       </dl>
       ${pending
         ? '<p class="pending-note">PROOF IS WAITING FOR HUMAN REVIEW.</p>'
-        : `<button class="task-open" type="button" data-open-task="${esc(task.key)}">file proof →</button>`}
+        : `<button class="task-open" type="button" data-open-task="${esc(task.key)}">submit proof →</button>`}
     </article>
   `;
 }
@@ -120,7 +120,7 @@ function submissionRow(item, taskMap) {
       <td>${date(item.submitted_at)}</td>
       <td>${esc(task?.label || item.task_key)}</td>
       <td><span class="status status-${esc(item.status)}">${esc(item.status)}</span></td>
-      <td>${proofLink ? `<a href="${esc(proofLink)}" target="_blank" rel="noopener">proof ↗</a>` : "stored file"}</td>
+      <td>${proofLink ? `<a href="${esc(proofLink)}" target="_blank" rel="noopener">view proof ↗</a>` : "uploaded"}</td>
     </tr>
   `;
 }
@@ -150,7 +150,7 @@ function renderDashboard(data) {
     <main class="dashboard">
       <section class="identity">
         <div>
-          <p class="eyebrow">ACTIVE MEMBER FILE</p>
+          <p class="eyebrow">YOUR AMBASSADOR DASHBOARD</p>
           <h1>${esc(member.invite.public_name)}</h1>
           <p class="strength">${esc(member.invite.strengths)}</p>
         </div>
@@ -164,8 +164,8 @@ function renderDashboard(data) {
 
       <section class="progress-section">
         <div class="progress-copy">
-          <p>${next ? `${next.min - member.points} points until ${esc(next.label)}` : "archive level reached"}</p>
-          <p>${member.product_eligible_at ? "PRODUCT FILE: ELIGIBLE / STOCK + BRIEF STILL REQUIRED" : "FIRST PRODUCT REVIEW OPENS AT 60 APPROVED POINTS"}</p>
+          <p>${next ? `${next.min - member.points} points to unlock ${esc(next.label)}` : "highest ambassador level reached"}</p>
+          <p>${member.product_eligible_at ? "FREE PRODUCT ELIGIBILITY UNLOCKED — WE WILL CONFIRM SIZE, STOCK, AND YOUR CREATIVE BRIEF" : "REACH 60 APPROVED POINTS TO UNLOCK FREE PRODUCT ELIGIBILITY"}</p>
         </div>
         <div class="meter"><span style="width:${progress}%"></span></div>
         <div class="level-track">
@@ -173,20 +173,30 @@ function renderDashboard(data) {
         </div>
       </section>
 
+      <section class="reward-ladder">
+        <p>WHAT YOU CAN UNLOCK</p>
+        <ol>
+          <li><strong>25 points</strong><span>active ambassador status</span></li>
+          <li><strong>60 points</strong><span>eligibility for your first free product</span></li>
+          <li><strong>150 points</strong><span>advanced opportunities and priority campaign consideration</span></li>
+          <li><strong>300 points</strong><span>elite status, limited-release access, and first consideration for paid work</span></li>
+        </ol>
+      </section>
+
       <section class="rules">
-        <p>LOGGED RULES / 07.28</p>
+        <p>HOW IT WORKS</p>
         <ul>
-          <li>Points appear only after a person reviews the proof.</li>
-          <li>Deleted posts, recycled work, generic comments, and engagement pods return zero.</li>
-          <li>Product eligibility is not an automatic shipment. Size, stock, location, and a real brief are confirmed first.</li>
-          <li>Paid campaign work remains separate from the points system and is agreed in writing.</li>
+          <li>Complete a task and submit the requested proof.</li>
+          <li>We review it personally. Approved work adds points to your account.</li>
+          <li>Original, thoughtful work earns credit. Spam, recycled work, and deleted posts do not.</li>
+          <li>Reward access grows with your level. Product and paid opportunities depend on fit, stock, location, and an agreed brief.</li>
         </ul>
       </section>
 
       <section class="tasks-section">
         <div class="section-head">
           <h2>open tasks</h2>
-          <p>${tasks.length} records available</p>
+          <p>${tasks.length} ways to earn points</p>
         </div>
         <div class="task-grid">
           ${tasks.map((task) => taskCard(task, submissions)).join("")}
@@ -198,8 +208,8 @@ function renderDashboard(data) {
           <div class="section-head"><h2>proof history</h2><p>manual queue</p></div>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>date</th><th>task</th><th>status</th><th>file</th></tr></thead>
-              <tbody>${submissions.length ? submissions.map((item) => submissionRow(item, taskMap)).join("") : '<tr><td colspan="4">no proof filed yet</td></tr>'}</tbody>
+              <thead><tr><th>date</th><th>task</th><th>status</th><th>proof</th></tr></thead>
+              <tbody>${submissions.length ? submissions.map((item) => submissionRow(item, taskMap)).join("") : '<tr><td colspan="4">no proof submitted yet</td></tr>'}</tbody>
             </table>
           </div>
         </div>
@@ -217,11 +227,11 @@ function renderDashboard(data) {
       <dialog id="proof-dialog">
         <form method="dialog" class="dialog-shell" data-proof-form>
           <button class="dialog-close" value="cancel" aria-label="Close">×</button>
-          <p class="eyebrow">NEW PROOF RECORD</p>
-          <h2 data-dialog-title>file proof</h2>
+          <p class="eyebrow">SUBMIT COMPLETED TASK</p>
+          <h2 data-dialog-title>submit proof</h2>
           <input type="hidden" name="task_key">
           <label>
-            screenshot / proof file
+            upload screenshot or PDF
             <input name="proof_file" type="file" accept="image/jpeg,image/png,image/webp,application/pdf">
           </label>
           <p class="form-or">— or —</p>
@@ -300,8 +310,8 @@ function renderDashboard(data) {
       submit.textContent = "submit for review →";
       return;
     }
-    message.textContent = "PROOF FILED. WAITING FOR HUMAN REVIEW.";
-    submit.textContent = "file received";
+    message.textContent = "SUBMITTED. WE WILL REVIEW IT AND ADD YOUR POINTS WHEN APPROVED.";
+    submit.textContent = "proof received";
     setTimeout(() => location.reload(), 700);
   });
 }
@@ -372,8 +382,8 @@ async function boot() {
   } catch (error) {
     shell(`
       <main class="gate">
-        <p class="eyebrow">FILE ERROR / RETRY REQUIRED</p>
-        <h1>something between<br>the ID and the archive failed.</h1>
+        <p class="eyebrow">CONNECTION ERROR</p>
+        <h1>we could not load<br>your dashboard.</h1>
         <p class="mono">${esc(error.message)}</p>
         <button class="primary-link as-button" onclick="location.reload()">retry connection →</button>
       </main>

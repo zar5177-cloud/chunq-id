@@ -5,8 +5,8 @@
     const link = document.createElement("a");
     link.id = LINK_ID;
     link.href = "/ambassador.html";
-    link.textContent = "AMBASSADOR FILE";
-    link.setAttribute("aria-label", "Open ambassador file");
+    link.textContent = "AMBASSADOR DASHBOARD";
+    link.setAttribute("aria-label", "Open ambassador dashboard");
     Object.assign(link.style, {
       position: "fixed",
       right: "12px",
