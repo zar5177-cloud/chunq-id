@@ -1,0 +1,14 @@
+{
+  "name": "chunq-id-static",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:ambassador": "esbuild src/ambassador.js --bundle --minify --format=esm --outfile=assets/ambassador.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.57.4"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.9"
+  }
+}
