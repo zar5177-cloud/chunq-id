@@ -8,7 +8,7 @@ const root = document.querySelector("#ambassador-app");
 const levels = [
   { level: 0, label: "starter", min: 0 },
   { level: 1, label: "active", min: 25 },
-  { level: 2, label: "product eligible", min: 60 },
+  { level: 2, label: "product eligible", min: 75 },
   { level: 3, label: "advanced", min: 150 },
   { level: 4, label: "elite", min: 300 },
 ];
@@ -41,7 +41,7 @@ function shell(content, member) {
     <header class="topbar">
       <a class="wordmark" href="/">chunq</a>
       <div class="topmeta">
-        <span>AMBASSADOR NETWORK</span>
+        <span>AMBASSADOR PROGRAM</span>
         <span>${member ? `MEMBER ${esc(member.invite?.invite_code || "UNLINKED")}` : "SIGN IN REQUIRED"}</span>
       </div>
       <nav>
@@ -82,16 +82,21 @@ function renderUnlinked(email) {
   `);
 }
 
-function taskCard(task, submissions) {
+function taskCard(task, submissions, member, index) {
   const history = submissions.filter((item) => item.task_key === task.key);
   const pending = history.find((item) => item.status === "pending");
+  const completed = task.lifetime_limit &&
+    history.filter((item) => ["pending", "approved"].includes(item.status)).length >= task.lifetime_limit;
+  const locked = member.level < task.min_level;
   const latest = history[0];
-  const limit = task.weekly_limit
+  const limit = task.lifetime_limit
+    ? "one time"
+    : task.weekly_limit
     ? `${task.weekly_limit} approved / week maximum`
     : "no weekly maximum";
 
   return `
-    <article class="task ${pending ? "is-pending" : ""}" data-task="${esc(task.key)}">
+    <article class="task ${pending ? "is-pending" : ""} ${locked ? "is-locked" : ""} ${completed ? "is-complete" : ""}" data-task="${esc(task.key)}" style="--delay:${index * 45}ms">
       <div class="task-head">
         <div>
           <span class="task-index">${String(task.sort_order).padStart(3, "0")}</span>
@@ -99,28 +104,63 @@ function taskCard(task, submissions) {
         </div>
         <strong>+${task.points}</strong>
       </div>
+      <p class="task-category">${esc(task.category)} task</p>
       <p>${esc(task.description)}</p>
       <dl>
         <div><dt>proof</dt><dd>${esc(task.proof_required)}</dd></div>
         <div><dt>frequency</dt><dd>${esc(limit)}</dd></div>
         <div><dt>latest</dt><dd>${latest ? `${esc(latest.status)} / ${date(latest.submitted_at)}` : "not submitted yet"}</dd></div>
       </dl>
-      ${pending
+      ${locked
+        ? `<p class="locked-note">UNLOCKS AT LEVEL ${task.min_level}</p>`
+        : completed && !pending
+        ? '<p class="complete-note">COMPLETED / POINTS ADDED AFTER APPROVAL</p>'
+        : pending
         ? '<p class="pending-note">PROOF IS WAITING FOR HUMAN REVIEW.</p>'
         : `<button class="task-open" type="button" data-open-task="${esc(task.key)}">submit proof →</button>`}
     </article>
   `;
 }
 
+function rewardCard(reward, claims, points, index) {
+  const claim = claims.find((item) => item.reward_key === reward.key);
+  const unlocked = points >= reward.points_required;
+  const remaining = Math.max(0, reward.points_required - points);
+  return `
+    <article class="reward ${unlocked ? "is-unlocked" : "is-locked"}" style="--delay:${index * 70}ms">
+      <div class="reward-top">
+        <span>${reward.points_required} POINTS</span>
+        <span>${claim ? esc(claim.status) : unlocked ? "UNLOCKED" : `${remaining} TO GO`}</span>
+      </div>
+      <h3>${esc(reward.label)}</h3>
+      <p>${esc(reward.description)}</p>
+      ${claim
+        ? `<p class="reward-status">REQUEST ${esc(claim.status.toUpperCase())} / ${date(claim.claimed_at)}</p>`
+        : unlocked
+        ? `<button type="button" class="claim-reward" data-claim-reward="${esc(reward.key)}">request this reward →</button>`
+        : `<div class="reward-mini-meter"><span style="width:${Math.min(100, (points / reward.points_required) * 100)}%"></span></div>`}
+    </article>
+  `;
+}
+
 function submissionRow(item, taskMap) {
   const task = taskMap.get(item.task_key);
+  const legacyLabels = {
+    "follow-save": "legacy launch task (retired)",
+    "specific-comment": "legacy launch task (retired)",
+  };
   const proofLink = item.display_url || item.proof_url;
+  const proofCell = item.proof_url?.startsWith("note://")
+    ? "private answer"
+    : proofLink
+    ? `<a href="${esc(proofLink)}" target="_blank" rel="noopener">view proof ↗</a>`
+    : "uploaded";
   return `
     <tr>
       <td>${date(item.submitted_at)}</td>
-      <td>${esc(task?.label || item.task_key)}</td>
+      <td>${esc(task?.label || legacyLabels[item.task_key] || item.task_key)}</td>
       <td><span class="status status-${esc(item.status)}">${esc(item.status)}</span></td>
-      <td>${proofLink ? `<a href="${esc(proofLink)}" target="_blank" rel="noopener">view proof ↗</a>` : "uploaded"}</td>
+      <td>${proofCell}</td>
     </tr>
   `;
 }
@@ -136,7 +176,7 @@ function ledgerRow(item) {
 }
 
 function renderDashboard(data) {
-  const { member, tasks, submissions, ledger } = data;
+  const { member, tasks, submissions, ledger, rewards, claims } = data;
   const level = currentLevel(member.points);
   const next = nextLevel(member.points);
   const rangeStart = level.min;
@@ -145,6 +185,13 @@ function renderDashboard(data) {
     ? Math.max(0, Math.min(100, ((member.points - rangeStart) / (rangeEnd - rangeStart)) * 100))
     : 100;
   const taskMap = new Map(tasks.map((task) => [task.key, task]));
+  const availableTasks = tasks.filter((task) => member.level >= task.min_level);
+  const nextTask = availableTasks
+    .filter((task) => !submissions.some((item) =>
+      item.task_key === task.key && ["pending", "approved"].includes(item.status) && task.lifetime_limit
+    ))
+    .sort((a, b) => a.points - b.points)[0];
+  const nextReward = rewards.find((reward) => reward.points_required > member.points);
 
   shell(`
     <main class="dashboard">
@@ -157,7 +204,7 @@ function renderDashboard(data) {
         <dl class="file-stats">
           <div><dt>creative class</dt><dd>${esc(member.creative_class)}</dd></div>
           <div><dt>current level</dt><dd>${member.level} / ${esc(level.label)}</dd></div>
-          <div><dt>approved points</dt><dd>${member.points}</dd></div>
+          <div><dt>approved points</dt><dd data-points="${member.points}">0</dd></div>
           <div><dt>joined</dt><dd>${date(member.joined_at)}</dd></div>
         </dl>
       </section>
@@ -165,22 +212,33 @@ function renderDashboard(data) {
       <section class="progress-section">
         <div class="progress-copy">
           <p>${next ? `${next.min - member.points} points to unlock ${esc(next.label)}` : "highest ambassador level reached"}</p>
-          <p>${member.product_eligible_at ? "FREE PRODUCT ELIGIBILITY UNLOCKED — WE WILL CONFIRM SIZE, STOCK, AND YOUR CREATIVE BRIEF" : "REACH 60 APPROVED POINTS TO UNLOCK FREE PRODUCT ELIGIBILITY"}</p>
+          <p>${member.product_eligible_at ? "FIRST FREE ITEM UNLOCKED — WE WILL CONFIRM SIZE, STOCK, AND YOUR CREATIVE BRIEF" : "REACH 75 APPROVED POINTS TO UNLOCK YOUR FIRST FREE ITEM"}</p>
         </div>
-        <div class="meter"><span style="width:${progress}%"></span></div>
+        <div class="meter"><span data-meter="${progress}"></span></div>
         <div class="level-track">
           ${levels.map((item) => `<span class="${member.points >= item.min ? "passed" : ""}">${item.min}<small>${esc(item.label)}</small></span>`).join("")}
         </div>
       </section>
 
-      <section class="reward-ladder">
-        <p>WHAT YOU CAN UNLOCK</p>
-        <ol>
-          <li><strong>25 points</strong><span>active ambassador status</span></li>
-          <li><strong>60 points</strong><span>eligibility for your first free product</span></li>
-          <li><strong>150 points</strong><span>advanced opportunities and priority campaign consideration</span></li>
-          <li><strong>300 points</strong><span>elite status, limited-release access, and first consideration for paid work</span></li>
-        </ol>
+      <section class="next-move">
+        <div>
+          <p class="eyebrow">YOUR NEXT MOVE</p>
+          <h2>${nextTask ? esc(nextTask.label) : "choose any open task"}</h2>
+        </div>
+        <div>
+          <strong>${nextTask ? `+${nextTask.points}` : "—"}</strong>
+          <p>${nextReward ? `${nextReward.points_required - member.points} points until ${esc(nextReward.label)}` : "all listed rewards unlocked"}</p>
+        </div>
+      </section>
+
+      <section class="rewards-section">
+        <div class="section-head">
+          <h2>rewards</h2>
+          <p>points never disappear when you claim</p>
+        </div>
+        <div class="reward-grid">
+          ${rewards.map((reward, index) => rewardCard(reward, claims, member.points, index)).join("")}
+        </div>
       </section>
 
       <section class="rules">
@@ -189,7 +247,8 @@ function renderDashboard(data) {
           <li>Complete a task and submit the requested proof.</li>
           <li>We review it personally. Approved work adds points to your account.</li>
           <li>Original, thoughtful work earns credit. Spam, recycled work, and deleted posts do not.</li>
-          <li>Reward access grows with your level. Product and paid opportunities depend on fit, stock, location, and an agreed brief.</li>
+          <li>Any public post connected to free products, discounts, points, or payment must clearly say “chunq ambassador,” “gifted by chunq,” or #ad where people can see it.</li>
+          <li>Product and paid opportunities depend on fit, stock, location, performance, and an agreed brief.</li>
         </ul>
       </section>
 
@@ -199,7 +258,7 @@ function renderDashboard(data) {
           <p>${tasks.length} ways to earn points</p>
         </div>
         <div class="task-grid">
-          ${tasks.map((task) => taskCard(task, submissions)).join("")}
+          ${tasks.map((task, index) => taskCard(task, submissions, member, index)).join("")}
         </div>
       </section>
 
@@ -230,6 +289,7 @@ function renderDashboard(data) {
           <p class="eyebrow">SUBMIT COMPLETED TASK</p>
           <h2 data-dialog-title>submit proof</h2>
           <input type="hidden" name="task_key">
+          <div data-proof-upload>
           <label>
             upload screenshot or PDF
             <input name="proof_file" type="file" accept="image/jpeg,image/png,image/webp,application/pdf">
@@ -239,6 +299,7 @@ function renderDashboard(data) {
             public proof link
             <input name="proof_url" type="url" placeholder="https://">
           </label>
+          </div>
           <label>
             note / context
             <textarea name="note" maxlength="700" rows="5" placeholder="handle, post context, anything the reviewer should know"></textarea>
@@ -257,6 +318,8 @@ function renderDashboard(data) {
       const task = taskMap.get(button.dataset.openTask);
       form.reset();
       form.elements.task_key.value = task.key;
+      form.dataset.proofMode = task.proof_mode;
+      root.querySelector("[data-proof-upload]").hidden = task.proof_mode === "note";
       root.querySelector("[data-dialog-title]").textContent = `${task.label} / +${task.points}`;
       root.querySelector("[data-form-message]").textContent = `Required: ${task.proof_required}.`;
       dialog.showModal();
@@ -277,7 +340,15 @@ function renderDashboard(data) {
     };
 
     const proofFile = form.elements.proof_file.files[0];
-    if (!proofFile && !payload.proof_url) {
+    if (form.dataset.proofMode === "note") {
+      if (!payload.note) {
+        message.textContent = "Write your answer in the note before submitting.";
+        submit.disabled = false;
+        submit.textContent = "submit for review →";
+        return;
+      }
+      payload.proof_url = "note://submitted";
+    } else if (!proofFile && !payload.proof_url) {
       message.textContent = "Attach a screenshot/file or paste a public proof link.";
       submit.disabled = false;
       submit.textContent = "submit for review →";
@@ -314,6 +385,60 @@ function renderDashboard(data) {
     submit.textContent = "proof received";
     setTimeout(() => location.reload(), 700);
   });
+
+  root.querySelectorAll("[data-claim-reward]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      button.textContent = "requesting...";
+      const { error } = await supabase.from("ambassador_reward_claims").insert({
+        member_id: member.id,
+        reward_key: button.dataset.claimReward,
+      });
+      if (error) {
+        button.textContent = error.message;
+        return;
+      }
+      button.textContent = "reward requested";
+      setTimeout(() => location.reload(), 700);
+    });
+  });
+
+  requestAnimationFrame(() => {
+    document.body.classList.add("is-ready");
+    root.querySelectorAll("[data-meter]").forEach((meter) => {
+      meter.style.width = `${meter.dataset.meter}%`;
+    });
+    const pointNode = root.querySelector("[data-points]");
+    const target = Number(pointNode?.dataset.points || 0);
+    const start = performance.now();
+    const tick = (now) => {
+      const amount = Math.round(target * Math.min(1, (now - start) / 650));
+      if (pointNode) pointNode.textContent = amount;
+      if (amount < target) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+
+  celebrateNewRewards(member.points, rewards);
+}
+
+function celebrateNewRewards(points, rewards) {
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const storageKey = "chunq-ambassador-last-points";
+  const previous = Number(localStorage.getItem(storageKey) || points);
+  localStorage.setItem(storageKey, String(points));
+  const unlocked = rewards.filter((reward) =>
+    previous < reward.points_required && points >= reward.points_required
+  );
+  if (!unlocked.length) return;
+
+  const burst = document.createElement("div");
+  burst.className = "reward-burst";
+  burst.innerHTML = Array.from({ length: 22 }, (_, index) =>
+    `<i style="--i:${index};--x:${Math.round(Math.random() * 240 - 120)}px;--r:${Math.round(Math.random() * 280 - 140)}deg"></i>`
+  ).join("");
+  document.body.appendChild(burst);
+  setTimeout(() => burst.remove(), 1600);
 }
 
 async function loadDashboard(user) {
@@ -326,7 +451,7 @@ async function loadDashboard(user) {
   if (memberError) throw memberError;
   if (!member) return renderUnlinked(user.email);
 
-  const [inviteResult, taskResult, submissionResult, ledgerResult] = await Promise.all([
+  const [inviteResult, taskResult, submissionResult, ledgerResult, rewardResult, claimResult] = await Promise.all([
     supabase
       .from("ambassador_invites")
       .select("public_name,invite_code,strengths,starting_note")
@@ -334,7 +459,7 @@ async function loadDashboard(user) {
       .single(),
     supabase
       .from("ambassador_tasks")
-      .select("key,label,description,points,proof_required,weekly_limit,sort_order")
+      .select("key,label,description,points,proof_required,weekly_limit,sort_order,category,proof_mode,lifetime_limit,min_level")
       .eq("active", true)
       .order("sort_order"),
     supabase
@@ -347,9 +472,19 @@ async function loadDashboard(user) {
       .select("id,delta,reason,created_at")
       .eq("member_id", member.id)
       .order("created_at", { ascending: false }),
+    supabase
+      .from("ambassador_rewards")
+      .select("key,label,description,points_required,sort_order")
+      .eq("active", true)
+      .order("sort_order"),
+    supabase
+      .from("ambassador_reward_claims")
+      .select("id,reward_key,status,claimed_at,fulfilled_at")
+      .eq("member_id", member.id)
+      .order("claimed_at", { ascending: false }),
   ]);
 
-  const failure = [inviteResult, taskResult, submissionResult, ledgerResult].find((result) => result.error);
+  const failure = [inviteResult, taskResult, submissionResult, ledgerResult, rewardResult, claimResult].find((result) => result.error);
   if (failure) throw failure.error;
 
   const submissions = submissionResult.data || [];
@@ -370,6 +505,8 @@ async function loadDashboard(user) {
     tasks: taskResult.data || [],
     submissions,
     ledger: ledgerResult.data || [],
+    rewards: rewardResult.data || [],
+    claims: claimResult.data || [],
   });
 }
 
