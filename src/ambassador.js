@@ -38,6 +38,17 @@ const date = (value) =>
       }).format(new Date(value))
     : "—";
 
+const dateTime = (value) =>
+  value
+    ? new Intl.DateTimeFormat("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      }).format(new Date(value))
+    : "—";
+
 const currentLevel = (points) =>
   [...levels].reverse().find((item) => points >= item.min) || levels[0];
 
@@ -205,7 +216,9 @@ function taskCard(state, index) {
       </div>
       <p class="task-limit">${esc(state.limit)}</p>
       ${publicTask ? '<p class="disclosure-note">Public posts must clearly say “Chunq ambassador,” “gifted by Chunq,” or #ad.</p>' : ""}
-      ${latest?.status === "rejected" ? '<p class="retry-note">Your last submission was not approved. Review the task and send a stronger version.</p>' : ""}
+      ${latest?.status === "rejected"
+        ? `<div class="retry-note"><strong>What to fix</strong><p>${esc(latest.review_feedback || "Review the task instructions and send a clearer version of the requested proof.")}</p></div>`
+        : ""}
       ${state.actionable
         ? `<button class="task-open" type="button" data-open-task="${esc(task.key)}">${taskButtonLabel(task, state.key === "retry")}</button>`
         : state.pending
@@ -222,16 +235,21 @@ function rewardCard(reward, claims, points, index) {
   const unlocked = points >= reward.points_required;
   const remaining = Math.max(0, reward.points_required - points);
   const status = claim
-    ? claim.status === "fulfilled"
-      ? "Completed"
-      : claim.status === "approved"
-      ? "Approved"
-      : claim.status === "rejected"
-      ? "Please contact us"
-      : "Request received"
+    ? {
+        requested: "Request received",
+        contacted: "Check your messages",
+        fulfilled: "Completed",
+        declined: "Please contact us",
+        expired: "Request expired",
+      }[claim.status] || "Request received"
     : unlocked
     ? "Ready to request"
     : `${remaining} points away`;
+  const trackingLink = claim?.tracking_url
+    ? `<a class="reward-tracking" href="${esc(claim.tracking_url)}" target="_blank" rel="noopener">track your package ↗</a>`
+    : claim?.tracking_number
+    ? `<p class="reward-tracking">Tracking: ${esc(claim.tracking_carrier ? `${claim.tracking_carrier} · ` : "")}${esc(claim.tracking_number)}</p>`
+    : "";
 
   return `
     <article class="reward ${unlocked ? "reward-ready" : "reward-locked"}" style="--delay:${index * 45}ms">
@@ -242,7 +260,11 @@ function rewardCard(reward, claims, points, index) {
       <h3>${esc(reward.label)}</h3>
       <p>${esc(reward.description)}</p>
       ${claim
-        ? `<p class="reward-result">${esc(status)} · ${date(claim.claimed_at)}</p>`
+        ? `<div class="reward-claim-detail">
+            <p class="reward-result">${esc(status)} · ${date(claim.claimed_at)}</p>
+            ${claim.staff_note ? `<p class="reward-note">${esc(claim.staff_note)}</p>` : ""}
+            ${trackingLink}
+          </div>`
         : unlocked
         ? `<button type="button" class="claim-reward" data-claim-reward="${esc(reward.key)}">request this reward →</button>`
         : `<div class="reward-mini-meter" aria-label="${remaining} points remaining"><span style="width:${Math.min(100, (points / reward.points_required) * 100)}%"></span></div>`}
@@ -312,6 +334,7 @@ function renderDashboard(data) {
       const bStarter = b.task.category === "onboarding" ? 0 : 1;
       return aStarter - bStarter || a.task.sort_order - b.task.sort_order;
     })[0];
+  const assignedNextAction = member.next_action?.trim() || "";
   const nextReward = rewards.find((reward) => reward.points_required > member.points);
   const rewardTarget = nextReward?.points_required || rewards.at(-1)?.points_required || 300;
   const previousReward = [...rewards].reverse().find((reward) => reward.points_required <= member.points);
@@ -352,13 +375,17 @@ function renderDashboard(data) {
       <section class="next-action" aria-labelledby="next-action-title">
         <div>
           <p class="eyebrow">DO THIS NEXT</p>
-          <h2 id="next-action-title">${nextTaskState ? esc(nextTaskState.task.label) : "You are caught up"}</h2>
-          <p>${nextTaskState ? esc(nextTaskState.task.description) : "There is no open task that needs your attention right now. Check your activity for anything waiting for review."}</p>
+          <h2 id="next-action-title">${assignedNextAction ? esc(assignedNextAction) : nextTaskState ? esc(nextTaskState.task.label) : "You are caught up"}</h2>
+          <p>${assignedNextAction
+            ? `This is the priority your Chunq team set for you.${member.next_action_due_at ? ` Please complete it by ${esc(dateTime(member.next_action_due_at))}.` : ""}`
+            : nextTaskState
+            ? esc(nextTaskState.task.description)
+            : "There is no open task that needs your attention right now. Check your activity for anything waiting for review."}</p>
         </div>
         ${nextTaskState ? `
           <div class="next-action-side">
-            <strong>+${nextTaskState.task.points} points</strong>
-            <span>What to send</span>
+            <strong>${assignedNextAction ? "Fastest available task" : `+${nextTaskState.task.points} points`}</strong>
+            <span>${assignedNextAction ? `${nextTaskState.task.points} points available` : "What to send"}</span>
             <p>${esc(nextTaskState.task.proof_required)}</p>
             <button type="button" data-open-task="${esc(nextTaskState.task.key)}">${taskButtonLabel(nextTaskState.task, nextTaskState.key === "retry")}</button>
           </div>
@@ -493,7 +520,55 @@ function renderDashboard(data) {
           <h2 id="reward-dialog-title" data-reward-title>Request reward</h2>
           <input type="hidden" name="reward_key">
           <p data-reward-description></p>
-          <p class="form-help" data-reward-message role="status">We will confirm the details by email before anything is shipped or issued.</p>
+          <label>
+            Item or option preference <span class="optional-label">(optional)</span>
+            <input name="reward_selection" maxlength="160" placeholder="Example: black tee, if available">
+          </label>
+          <div data-size-fields hidden>
+            <label>
+              Your size
+              <input name="size" maxlength="40" autocomplete="off" placeholder="Example: M">
+            </label>
+          </div>
+          <fieldset class="shipping-fields" data-shipping-fields hidden>
+            <legend>Where should we send it?</legend>
+            <label>
+              Full name
+              <input name="shipping_name" maxlength="120" autocomplete="name">
+            </label>
+            <label>
+              Address
+              <input name="shipping_address_line1" maxlength="160" autocomplete="address-line1">
+            </label>
+            <label>
+              Apartment, suite, or unit <span class="optional-label">(optional)</span>
+              <input name="shipping_address_line2" maxlength="160" autocomplete="address-line2">
+            </label>
+            <div class="reward-form-grid">
+              <label>
+                City
+                <input name="shipping_city" maxlength="100" autocomplete="address-level2">
+              </label>
+              <label>
+                State / region
+                <input name="shipping_region" maxlength="100" autocomplete="address-level1">
+              </label>
+              <label>
+                Postal code
+                <input name="shipping_postal_code" maxlength="40" autocomplete="postal-code">
+              </label>
+              <label>
+                Country
+                <input name="shipping_country" maxlength="100" autocomplete="country-name">
+              </label>
+            </div>
+          </fieldset>
+          <label>
+            Anything the Chunq team should know? <span class="optional-label">(optional)</span>
+            <textarea name="member_note" maxlength="700" rows="3" placeholder="Fit notes, delivery notes, or a question"></textarea>
+          </label>
+          <p class="reward-privacy">Shipping details are used only to prepare and deliver your reward. Check every field before requesting.</p>
+          <p class="form-help" data-reward-message role="status">We will confirm your request in your dashboard messages.</p>
           <div class="dialog-actions">
             <button class="secondary-button" type="button" data-close-reward>not yet</button>
             <button class="submit-proof" type="submit">yes, request it →</button>
@@ -638,11 +713,31 @@ function renderDashboard(data) {
       const reward = rewards.find((item) => item.key === button.dataset.claimReward);
       rewardForm.reset();
       rewardForm.elements.reward_key.value = reward.key;
+      rewardForm.dataset.requiresShipping = String(Boolean(reward.requires_shipping));
+      rewardForm.dataset.requiresSize = String(Boolean(reward.requires_size));
+      const shippingFields = root.querySelector("[data-shipping-fields]");
+      const sizeFields = root.querySelector("[data-size-fields]");
+      shippingFields.hidden = !reward.requires_shipping;
+      sizeFields.hidden = !reward.requires_size;
+      shippingFields.querySelectorAll("input").forEach((input) => {
+        input.required = Boolean(reward.requires_shipping) && input.name !== "shipping_address_line2";
+      });
+      rewardForm.elements.size.required = Boolean(reward.requires_size);
       root.querySelector("[data-reward-title]").textContent = reward.label;
       root.querySelector("[data-reward-description]").textContent = reward.description;
       root.querySelector("[data-reward-message]").textContent =
-        "We will confirm the details by email before anything is shipped or issued.";
+        reward.requires_shipping
+          ? "Complete the shipping details so the team can prepare your reward."
+          : "We will confirm your request in your dashboard messages.";
       rewardDialog.showModal();
+      setTimeout(() => {
+        const firstField = reward.requires_size
+          ? rewardForm.elements.size
+          : reward.requires_shipping
+          ? rewardForm.elements.shipping_name
+          : rewardForm.elements.reward_selection;
+        firstField?.focus();
+      }, 0);
     });
   });
 
@@ -654,11 +749,25 @@ function renderDashboard(data) {
     event.preventDefault();
     const submit = rewardForm.querySelector(".submit-proof");
     const message = root.querySelector("[data-reward-message]");
+    message.className = "form-help";
+    if (!rewardForm.reportValidity()) return;
     submit.disabled = true;
     submit.textContent = "requesting...";
+    const fields = new FormData(rewardForm);
+    const value = (name) => String(fields.get(name) || "").trim() || null;
     const { error } = await supabase.from("ambassador_reward_claims").insert({
       member_id: member.id,
-      reward_key: rewardForm.elements.reward_key.value,
+      reward_key: value("reward_key"),
+      reward_selection: value("reward_selection"),
+      size: value("size"),
+      shipping_name: value("shipping_name"),
+      shipping_address_line1: value("shipping_address_line1"),
+      shipping_address_line2: value("shipping_address_line2"),
+      shipping_city: value("shipping_city"),
+      shipping_region: value("shipping_region"),
+      shipping_postal_code: value("shipping_postal_code"),
+      shipping_country: value("shipping_country"),
+      member_note: value("member_note"),
     });
     if (error) {
       message.textContent = friendlyError(error, "We could not save the reward request. Refresh and try again.");
@@ -667,7 +776,7 @@ function renderDashboard(data) {
       submit.textContent = "yes, request it →";
       return;
     }
-    message.textContent = "Request received. Watch your email for the next step.";
+    message.textContent = "Request received. Watch your dashboard messages for the next step.";
     message.classList.add("form-success");
     submit.textContent = "request received";
     setTimeout(() => location.reload(), 900);
@@ -718,7 +827,7 @@ function celebrateNewRewards(points, rewards) {
 async function loadDashboard(user) {
   const { data: member, error: memberError } = await supabase
     .from("ambassador_members")
-    .select("id,user_id,invite_id,creative_class,points,level,product_eligible_at,joined_at")
+    .select("id,user_id,invite_id,creative_class,points,level,product_eligible_at,joined_at,next_action,next_action_due_at")
     .eq("user_id", user.id)
     .maybeSingle();
 
@@ -738,7 +847,7 @@ async function loadDashboard(user) {
       .order("sort_order"),
     supabase
       .from("ambassador_submissions")
-      .select("id,task_key,proof_url,note,status,reviewed_at,submitted_at")
+      .select("id,task_key,proof_url,note,status,review_feedback,reviewed_at,submitted_at")
       .eq("member_id", member.id)
       .order("submitted_at", { ascending: false }),
     supabase
@@ -748,12 +857,12 @@ async function loadDashboard(user) {
       .order("created_at", { ascending: false }),
     supabase
       .from("ambassador_rewards")
-      .select("key,label,description,points_required,sort_order")
+      .select("key,label,description,points_required,sort_order,requires_shipping,requires_size,tracking_required")
       .eq("active", true)
       .order("sort_order"),
     supabase
       .from("ambassador_reward_claims")
-      .select("id,reward_key,status,claimed_at,fulfilled_at")
+      .select("id,reward_key,status,member_note,staff_note,claimed_at,contacted_at,fulfilled_at,reward_selection,size,shipping_name,shipping_address_line1,shipping_address_line2,shipping_city,shipping_region,shipping_postal_code,shipping_country,tracking_carrier,tracking_number,tracking_url")
       .eq("member_id", member.id)
       .order("claimed_at", { ascending: false }),
   ]);

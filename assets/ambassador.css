@@ -334,7 +334,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
   border: 1px solid var(--line);
 }
 .disclosure-note { background: var(--accent); }
-.retry-note { color: var(--error); }
+.retry-note { color: var(--error); background: rgba(142, 20, 20, .05); }
+.retry-note strong { display: block; margin-bottom: 4px; text-transform: uppercase; letter-spacing: .06em; }
+.retry-note p { margin: 0; }
 .task-open {
   width: 100%;
   border: 0;
@@ -380,7 +382,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
   margin: 30px 0 8px;
 }
 .reward > p { font-size: 10px; line-height: 1.5; }
-.reward-result { margin-top: auto; font-weight: 700; }
+.reward-claim-detail { margin-top: auto; border-top: 1px dotted var(--ink); padding-top: 10px; }
+.reward-result { margin: 0; font-weight: 700; }
+.reward-note { margin: 7px 0 0; font-size: 9px; line-height: 1.45; }
+.reward-tracking { display: block; margin: 8px 0 0; color: inherit; font-size: 9px; font-weight: 700; overflow-wrap: anywhere; }
 .claim-reward {
   margin-top: auto;
   border: 1px solid var(--ink);
@@ -483,6 +488,27 @@ dialog::backdrop { background: rgba(0,0,0,.66); backdrop-filter: blur(3px); }
 }
 .dialog-shell input[type="file"] { padding: 8px; }
 .dialog-shell small { display: block; margin-top: 5px; color: var(--muted); }
+.shipping-fields {
+  border: 1px solid var(--ink);
+  margin: 20px 0;
+  padding: 4px 14px 8px;
+}
+.shipping-fields legend {
+  padding: 0 7px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+.reward-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+.optional-label { color: var(--muted); font-weight: 400; }
+.reward-privacy {
+  border-left: 3px solid var(--accent);
+  padding-left: 10px;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.5;
+}
 .form-or { margin: -7px 0; text-align: center; font-size: 9px; color: var(--muted); }
 .form-help { font-size: 10px; min-height: 30px; line-height: 1.45; }
 .form-error { color: var(--error); font-weight: 700; }
@@ -556,6 +582,7 @@ dialog::backdrop { background: rgba(0,0,0,.66); backdrop-filter: blur(3px); }
   .next-action-side { padding-top: 12px; }
   .next-action-side > strong { font-size: 23px; margin-bottom: 10px; }
   .next-action-side > span, .next-action-side > p { display: none; }
+  .reward-form-grid { grid-template-columns: 1fr; }
   .section-head { align-items: flex-start; flex-direction: column; }
   .section-head p { text-align: left; }
   .task-grid, .task-grid-starter, .reward-grid { grid-template-columns: 1fr; }

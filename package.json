@@ -3,7 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build:ambassador": "esbuild src/ambassador.js --bundle --minify --format=esm --outfile=assets/ambassador.js"
+    "build": "npm run build:ambassador && npm run build:ambassador-admin",
+    "build:ambassador": "esbuild src/ambassador.js --bundle --minify --format=esm --outfile=assets/ambassador.js",
+    "build:ambassador-admin": "esbuild src/ambassador-admin.js --bundle --minify --format=esm --outfile=assets/ambassador-admin.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4"
