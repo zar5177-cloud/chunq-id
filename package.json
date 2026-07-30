@@ -5,7 +5,8 @@
   "scripts": {
     "build": "npm run build:ambassador && npm run build:ambassador-admin",
     "build:ambassador": "esbuild src/ambassador.js --bundle --minify --format=esm --outfile=assets/ambassador.js",
-    "build:ambassador-admin": "esbuild src/ambassador-admin.js --bundle --minify --format=esm --outfile=assets/ambassador-admin.js"
+    "build:ambassador-admin": "esbuild src/ambassador-admin.js --bundle --minify --format=esm --outfile=assets/ambassador-admin.js",
+    "sync:applications": "node scripts/sync-ambassador-applications.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4"

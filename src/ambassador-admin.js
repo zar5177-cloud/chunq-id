@@ -19,10 +19,18 @@ const state = {
   communications: [],
   actions: [],
   profiles: [],
+  applications: [],
+  applicationEvents: [],
+  emailOutbox: [],
+  integrationHealth: [],
+  syncRuns: [],
   activeTab: "review",
   selectedSubmissionId: null,
   selectedClaimId: null,
+  selectedApplicationId: null,
   reviewStatus: "pending",
+  applicationStatus: "action",
+  applicationSearch: "",
   peopleStatus: "all",
   search: "",
   includeTest: false,
@@ -91,6 +99,24 @@ const rewardOpsFor = (claimId) =>
   state.rewardOps.find((item) => item.reward_claim_id === claimId) || {};
 const staffFor = (userId) => state.staffList.find((staff) => staff.user_id === userId);
 const profileFor = (userId) => state.profiles.find((profile) => profile.user_id === userId);
+const outboxFor = (applicationId) =>
+  state.emailOutbox.find((message) => message.application_id === applicationId);
+
+const safeUrl = (value) => {
+  try {
+    const parsed = new URL(String(value || "").trim());
+    return ["http:", "https:"].includes(parsed.protocol) ? parsed.href : "";
+  } catch {
+    return "";
+  }
+};
+
+const linkButton = (label, value) => {
+  const href = safeUrl(value);
+  return href
+    ? `<a class="proof-link" href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(label)} ↗</a>`
+    : "";
+};
 
 function toast(message, type = "success") {
   let region = document.querySelector(".toast-region");
@@ -211,6 +237,11 @@ async function loadData() {
     notesResult,
     communicationsResult,
     actionsResult,
+    applicationsResult,
+    applicationEventsResult,
+    outboxResult,
+    integrationHealthResult,
+    syncRunsResult,
   ] = await Promise.all([
     supabase.from("ambassador_admins").select("*").order("created_at"),
     supabase
@@ -251,6 +282,32 @@ async function loadData() {
       .select("*")
       .order("created_at", { ascending: false })
       .limit(1000),
+    supabase
+      .from("ambassador_applications")
+      .select(`
+        *,
+        invite:ambassador_invites(id,email,initial_class,invite_code,status,contacted_at,claimed_at)
+      `)
+      .order("submitted_at", { ascending: false }),
+    supabase
+      .from("ambassador_application_events")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(1000),
+    supabase
+      .from("ambassador_email_outbox")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(1000),
+    supabase
+      .from("ambassador_integration_health")
+      .select("*")
+      .order("label"),
+    supabase
+      .from("ambassador_integration_sync_runs")
+      .select("*")
+      .order("started_at", { ascending: false })
+      .limit(100),
   ]);
 
   const results = [
@@ -264,6 +321,11 @@ async function loadData() {
     notesResult,
     communicationsResult,
     actionsResult,
+    applicationsResult,
+    applicationEventsResult,
+    outboxResult,
+    integrationHealthResult,
+    syncRunsResult,
   ];
   const failed = results.find((result) => result.error);
   if (failed) throw failed.error;
@@ -278,6 +340,11 @@ async function loadData() {
   state.notes = notesResult.data || [];
   state.communications = communicationsResult.data || [];
   state.actions = actionsResult.data || [];
+  state.applications = applicationsResult.data || [];
+  state.applicationEvents = applicationEventsResult.data || [];
+  state.emailOutbox = outboxResult.data || [];
+  state.integrationHealth = integrationHealthResult.data || [];
+  state.syncRuns = syncRunsResult.data || [];
 
   const userIds = state.members.map((member) => member.user_id).filter(Boolean);
   if (userIds.length) {
@@ -317,12 +384,21 @@ function metrics() {
   const overdueRewards = rewards.filter((item) => isOverdue(rewardOpsFor(item.id).due_at));
   const waitingOnChunq = members.filter((member) => memberOpsFor(member.id).status === "waiting_on_chunq");
   const urgent = members.filter((member) => memberOpsFor(member.id).priority === "urgent");
+  const applicationAction = state.applications.filter((application) =>
+    !application.duplicate_of
+    && (
+      ["pending", "more_info"].includes(application.decision_status)
+      || ["email_conflict", "invalid_email"].includes(application.data_quality_status)
+      || (application.decision_status === "accepted" && !application.invite_id)
+    )
+  );
   return {
     members: members.length,
     pending: pending.length,
     rewards: rewards.length,
     overdue: overdueReviews.length + overdueRewards.length,
     needsAttention: new Set([...waitingOnChunq, ...urgent].map((member) => member.id)).size,
+    applicationAction: applicationAction.length,
   };
 }
 
@@ -351,6 +427,11 @@ function shell() {
         </section>
 
         <section class="metrics" aria-label="Program status">
+          <article class="metric ${counts.applicationAction ? "urgent" : ""}">
+            <span>Applications to handle</span>
+            <strong>${counts.applicationAction}</strong>
+            <small>Decisions, conflicts, or missing accounts</small>
+          </article>
           <article class="metric">
             <span>Real ambassadors</span>
             <strong>${counts.members}</strong>
@@ -379,10 +460,12 @@ function shell() {
         </section>
 
         <nav class="ops-tabs" aria-label="Operations">
+          ${tabButton("applications", "Applications", counts.applicationAction)}
           ${tabButton("review", "Review", counts.pending)}
           ${tabButton("rewards", "Rewards", counts.rewards)}
           ${tabButton("people", "People", counts.members)}
           ${tabButton("activity", "Activity", "")}
+          ${tabButton("integrations", "Integrations", "")}
           ${tabButton("guide", "Playbook", "")}
           ${tabButton("settings", "Staff access", "")}
         </nav>
@@ -447,12 +530,489 @@ function tabButton(key, label, count) {
 function renderPanel() {
   const panel = root.querySelector("[data-panel]");
   if (!panel) return;
+  if (state.activeTab === "applications") renderApplications(panel);
   if (state.activeTab === "review") renderReview(panel);
   if (state.activeTab === "rewards") renderRewards(panel);
   if (state.activeTab === "people") renderPeople(panel);
   if (state.activeTab === "activity") renderActivity(panel);
+  if (state.activeTab === "integrations") renderIntegrations(panel);
   if (state.activeTab === "guide") renderGuide(panel);
   if (state.activeTab === "settings") renderSettings(panel);
+}
+
+function applicationItems() {
+  const search = state.applicationSearch.toLowerCase();
+  return state.applications
+    .filter((application) => {
+      const matchesStatus = {
+        action:
+          !application.duplicate_of
+          && (
+            ["pending", "more_info"].includes(application.decision_status)
+            || ["email_conflict", "invalid_email"].includes(application.data_quality_status)
+            || (application.decision_status === "accepted" && !application.invite_id)
+          ),
+        all: true,
+        conflicts: ["email_conflict", "invalid_email"].includes(application.data_quality_status),
+        duplicates: Boolean(application.duplicate_of),
+        accepted: application.decision_status === "accepted" && !application.duplicate_of,
+        more_info: application.decision_status === "more_info" && !application.duplicate_of,
+        declined: application.decision_status === "declined" && !application.duplicate_of,
+      }[state.applicationStatus];
+      if (!matchesStatus) return false;
+      if (!search) return true;
+      return [
+        application.public_name,
+        application.legal_name,
+        application.collector_email,
+        application.stated_email,
+        application.instagram_handle,
+        application.tiktok_handle,
+        application.city,
+        application.country,
+      ].some((value) => String(value || "").toLowerCase().includes(search));
+    })
+    .sort((left, right) => {
+      const priority = (application) => {
+        if (application.data_quality_status === "email_conflict") return 0;
+        if (application.data_quality_status === "invalid_email") return 1;
+        if (application.decision_status === "pending") return 2;
+        if (application.decision_status === "more_info") return 3;
+        if (application.decision_status === "accepted" && !application.invite_id) return 4;
+        if (application.decision_status === "accepted") return 5;
+        if (application.decision_status === "declined") return 6;
+        return 7;
+      };
+      return priority(left) - priority(right)
+        || Number(right.review_score || 0) - Number(left.review_score || 0)
+        || new Date(right.submitted_at) - new Date(left.submitted_at);
+    });
+}
+
+function renderApplications(panel) {
+  const items = applicationItems();
+  if (!items.some((item) => item.id === state.selectedApplicationId)) {
+    state.selectedApplicationId = items[0]?.id || null;
+  }
+  const selected = items.find((item) => item.id === state.selectedApplicationId);
+  const responses = state.applications.length;
+  const uniquePeople = new Set(
+    state.applications.filter((application) => !application.duplicate_of).map((application) => application.person_key),
+  ).size;
+  const conflicts = state.applications.filter((application) =>
+    !application.duplicate_of && ["email_conflict", "invalid_email"].includes(application.data_quality_status)
+  ).length;
+  const duplicates = state.applications.filter((application) => application.duplicate_of).length;
+
+  panel.innerHTML = `
+    <section class="panel" aria-labelledby="applications-title">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow">INTAKE → DECISION → ACCOUNT → MESSAGE</p>
+          <h2 id="applications-title">Applications</h2>
+          <p>${responses} source responses are preserved as ${uniquePeople} people. Nothing is silently merged: ${duplicates} repeat submissions and ${conflicts} unresolved email problems remain visible.</p>
+        </div>
+        <div class="filter-bar">
+          <input type="search" data-application-search placeholder="search applicant or account" value="${esc(state.applicationSearch)}" aria-label="Search applications">
+          <select data-application-status aria-label="Filter applications">
+            ${option("action", "Needs action", state.applicationStatus)}
+            ${option("all", "All source responses", state.applicationStatus)}
+            ${option("conflicts", "Email problems", state.applicationStatus)}
+            ${option("accepted", "Accepted", state.applicationStatus)}
+            ${option("more_info", "More info", state.applicationStatus)}
+            ${option("declined", "Declined", state.applicationStatus)}
+            ${option("duplicates", "Repeat submissions", state.applicationStatus)}
+          </select>
+        </div>
+      </div>
+
+      <div class="queue-layout application-layout">
+        <div class="queue-list" aria-label="Application queue">
+          ${items.length
+            ? items.map(applicationQueueItem).join("")
+            : emptyQueue("No applications match this view.", "Change the filter or refresh the live data.")}
+        </div>
+        ${selected
+          ? applicationDetail(selected)
+          : emptyQueue("Nothing selected.", "Choose an application from the queue.")}
+      </div>
+    </section>
+  `;
+
+  panel.querySelector("[data-application-search]").addEventListener("input", (event) => {
+    state.applicationSearch = event.target.value;
+    renderApplications(panel);
+  });
+  panel.querySelector("[data-application-status]").addEventListener("change", (event) => {
+    state.applicationStatus = event.target.value;
+    renderApplications(panel);
+  });
+  panel.querySelectorAll("[data-application-id]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedApplicationId = button.dataset.applicationId;
+      renderApplications(panel);
+    });
+  });
+  panel.querySelector("[data-primary-application]")?.addEventListener("click", (event) => {
+    state.applicationStatus = "all";
+    state.selectedApplicationId = event.currentTarget.dataset.primaryApplication;
+    renderApplications(panel);
+  });
+  attachApplicationActions(panel, selected);
+}
+
+function applicationQueueItem(application) {
+  const score = application.review_score ?? "—";
+  const quality = application.data_quality_status.replaceAll("_", " ");
+  const observed = Math.max(
+    Number(application.instagram_followers_observed || 0),
+    Number(application.tiktok_followers_observed || 0),
+    Number(application.youtube_subscribers_observed || 0),
+  );
+  return `
+    <button class="queue-item" type="button" data-application-id="${application.id}" aria-current="${state.selectedApplicationId === application.id}">
+      <span>
+        <span class="queue-kicker">${esc(application.decision_status)} · ${esc(quality)}</span>
+        <h3>${esc(application.public_name)}</h3>
+        <p>${esc(application.primary_platform || "platform not stated")} · ${observed ? `${observed.toLocaleString("en-US")} observed followers` : "audience not publicly verified"}</p>
+        <p>source row ${application.source_row} · ${application.invite_id ? "existing invite linked" : "no linked invite"}</p>
+      </span>
+      <span class="queue-score">${esc(score)}</span>
+    </button>
+  `;
+}
+
+function applicationDetail(application) {
+  const duplicate = application.duplicate_of
+    ? state.applications.find((item) => item.id === application.duplicate_of)
+    : null;
+  const messages = state.emailOutbox.filter((message) => message.application_id === application.id);
+  const events = state.applicationEvents.filter((event) => event.application_id === application.id);
+  const canDecide = ["owner", "admin"].includes(state.staff.role) && !application.duplicate_of;
+  const rawAnswers = Object.entries(application.raw_response || {})
+    .filter(([, value]) => String(value ?? "").trim())
+    .map(([question, answer]) => `
+      <div class="answer-row">
+        <dt>${esc(question)}</dt>
+        <dd>${nl2br(String(answer))}</dd>
+      </div>
+    `)
+    .join("");
+  const links = [
+    ["Instagram", application.instagram_url],
+    ["TikTok", application.tiktok_url],
+    ["YouTube", application.youtube_url],
+    ["Best content", application.best_content_url],
+    ["Second example", application.second_content_url],
+    ["Portfolio / moodboard", application.portfolio_url],
+    ...(application.photo_urls || []).map((value, index) => [`Photo ${index + 1}`, value]),
+  ].map(([label, value]) => linkButton(label, value)).filter(Boolean).join("");
+  const qualityText = application.data_quality_status.replaceAll("_", " ");
+  const decision = ["accepted", "more_info", "declined"].includes(application.decision_status)
+    ? application.decision_status
+    : "accepted";
+  const tier = application.final_tier || application.recommended_tier || "community";
+
+  return `
+    <article class="detail-card application-detail">
+      <header class="detail-top">
+        <div>
+          <p class="eyebrow">SOURCE ROW ${application.source_row} · ${esc(qualityText)}</p>
+          <h2>${esc(application.public_name)}</h2>
+          <p>${esc([application.city, application.region, application.country].filter(Boolean).join(", ") || "Location not stated")} · submitted ${formatDate(application.submitted_at, true)}</p>
+        </div>
+        <div class="points-block">
+          <strong>${application.review_score ?? "—"}</strong>
+          <span>review score / 100</span>
+        </div>
+      </header>
+
+      ${duplicate ? `
+        <section class="application-hold duplicate-hold">
+          <strong>Repeat submission — do not contact this row separately.</strong>
+          <span>The complete response is retained, but the decision belongs to the primary record.</span>
+          <button class="button-secondary" type="button" data-primary-application="${duplicate.id}">open primary application →</button>
+        </section>
+      ` : ""}
+
+      ${application.email_conflict ? `
+        <section class="application-hold conflict-hold">
+          <strong>Outreach is blocked until the correct email is selected.</strong>
+          <span>The account-collector email and the applicant-typed email do not match. Neither is silently preferred.</span>
+          ${canDecide ? `
+            <form class="email-resolution-form" data-email-resolution-form>
+              <label class="field">
+                <span>Correct email</span>
+                <select name="canonical_email" required>
+                  <option value="${esc(application.collector_email)}">${esc(application.collector_email)} · Google account</option>
+                  <option value="${esc(application.stated_email)}">${esc(application.stated_email)} · typed in form</option>
+                </select>
+              </label>
+              <button class="button-primary" type="submit">use this email and unblock →</button>
+              <p class="form-message" data-resolution-message></p>
+            </form>
+          ` : ""}
+        </section>
+      ` : ""}
+
+      <div class="detail-grid">
+        <div class="detail-main">
+          <section class="detail-section">
+            <h3>Identity and audience</h3>
+            <dl class="application-facts">
+              <div><dt>Contact email</dt><dd>${esc(application.canonical_email || "Unresolved")}</dd></div>
+              <div><dt>Google account email</dt><dd>${esc(application.collector_email || "—")}</dd></div>
+              <div><dt>Typed email</dt><dd>${esc(application.stated_email || "—")}</dd></div>
+              <div><dt>Phone</dt><dd>${esc(application.phone || "—")}</dd></div>
+              <div><dt>Instagram</dt><dd>${application.instagram_followers_observed?.toLocaleString("en-US") || "0"} observed · ${esc(application.instagram_followers_claimed || "not claimed")} claimed</dd></div>
+              <div><dt>TikTok</dt><dd>${application.tiktok_followers_observed?.toLocaleString("en-US") || "0"} observed · ${esc(application.tiktok_followers_claimed || "not claimed")} claimed</dd></div>
+              <div><dt>YouTube</dt><dd>${application.youtube_subscribers_observed?.toLocaleString("en-US") || "0"} observed · ${esc(application.youtube_subscribers_claimed || "not claimed")} claimed</dd></div>
+              <div><dt>Typical performance claim</dt><dd>${esc(application.average_performance_claimed || "—")}</dd></div>
+            </dl>
+            ${links ? `<div class="application-links">${links}</div>` : "<p>No usable public links were submitted.</p>"}
+          </section>
+
+          <section class="detail-section">
+            <h3>Critical review</h3>
+            <p><strong>Strengths:</strong> ${esc(application.strengths || "Not yet written.")}</p>
+            <p><strong>Risks and contradictions:</strong> ${esc(application.risks || "None recorded.")}</p>
+            <p><strong>Assessment:</strong> ${esc(application.decision_note || "Not yet written.")}</p>
+            <p><strong>Required next move:</strong> ${esc(application.first_mission || "Not yet assigned.")}</p>
+          </section>
+
+          <details class="answer-book">
+            <summary>Read every form answer (${Object.keys(application.raw_response || {}).length} fields)</summary>
+            <dl>${rawAnswers}</dl>
+          </details>
+
+          <section class="detail-section">
+            <h3>Communication record</h3>
+            ${messages.length ? messages.map(outboxMessage).join("") : `
+              <p>No database-tracked draft exists for this source record. Older IONOS messages remain outside this tracker and are not being guessed as sent.</p>
+            `}
+          </section>
+        </div>
+
+        <aside class="detail-side">
+          <dl class="meta-list">
+            <div><dt>Decision</dt><dd><span class="pill ${esc(application.decision_status)}">${esc(application.decision_status.replaceAll("_", " "))}</span></dd></div>
+            <div><dt>Data quality</dt><dd><span class="pill ${esc(application.data_quality_status)}">${esc(qualityText)}</span></dd></div>
+            <div><dt>Recommended tier</dt><dd>${esc(application.recommended_tier || "—")}</dd></div>
+            <div><dt>Final tier</dt><dd>${esc(application.final_tier || "—")}</dd></div>
+            <div><dt>Invite</dt><dd>${application.invite ? `${esc(application.invite.invite_code)} · ${esc(application.invite.status)}` : "Not linked"}</dd></div>
+            <div><dt>Review events</dt><dd>${events.length}</dd></div>
+          </dl>
+
+          ${canDecide && !application.email_conflict ? `
+            <section class="detail-section">
+              <h3>Decision and personal response</h3>
+              <form class="application-decision-form ops-form" data-application-decision-form>
+                <label class="field"><span>Decision</span><select name="decision">
+                  ${option("accepted", "Accept and open account", decision)}
+                  ${option("more_info", "Ask for more information", decision)}
+                  ${option("declined", "Decline", decision)}
+                </select></label>
+                <div class="form-split">
+                  <label class="field"><span>Starting tier</span><select name="tier">
+                    ${option("signature", "Signature", tier)}
+                    ${option("core", "Core", tier)}
+                    ${option("creator", "Creator", tier)}
+                    ${option("community", "Community", tier)}
+                  </select></label>
+                  <label class="field"><span>Score / 100</span><input name="score" type="number" min="0" max="100" value="${esc(application.review_score ?? "")}"></label>
+                </div>
+                <label class="field"><span>Why they stand out</span><textarea name="strengths" required>${esc(application.strengths || "")}</textarea></label>
+                <label class="field"><span>Decision note</span><textarea name="decision_note">${esc(application.decision_note || "")}</textarea></label>
+                <label class="field"><span>First task / missing proof</span><textarea name="first_mission" required>${esc(application.first_mission || "")}</textarea></label>
+                <label class="field"><span>Email subject (optional)</span><input name="email_subject" placeholder="A clear default is generated"></label>
+                <label class="field"><span>Personal email body (optional)</span><textarea name="email_body" placeholder="Leave blank to generate a straightforward response from the fields above."></textarea></label>
+                <div class="decision-help">This saves the decision and creates or refreshes a private email draft. It does not send anything automatically.</div>
+                <button class="button-primary" type="submit">save decision + prepare draft →</button>
+                <p class="form-message" data-application-message></p>
+              </form>
+            </section>
+          ` : ""}
+        </aside>
+      </div>
+    </article>
+  `;
+}
+
+function outboxMessage(message) {
+  const mailto = `mailto:${encodeURIComponent(message.to_email)}?subject=${encodeURIComponent(message.subject)}&body=${encodeURIComponent(message.body)}`;
+  return `
+    <article class="outbox-message">
+      <header>
+        <span class="pill ${esc(message.status)}">${esc(message.status)}</span>
+        <time>${formatDate(message.created_at, true)}</time>
+      </header>
+      <h4>${esc(message.subject)}</h4>
+      <p>${nl2br(message.body)}</p>
+      ${message.status === "draft"
+        ? `<a class="button-secondary outbox-open" href="${esc(mailto)}">open in company email app →</a>`
+        : ""}
+      ${message.last_error ? `<p class="due-overdue">${esc(message.last_error)}</p>` : ""}
+    </article>
+  `;
+}
+
+function attachApplicationActions(panel, application) {
+  if (!application) return;
+  panel.querySelector("[data-email-resolution-form]")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const message = form.querySelector("[data-resolution-message]");
+    const button = form.querySelector("button");
+    button.disabled = true;
+    message.textContent = "saving...";
+    try {
+      const { error } = await supabase.rpc("ambassador_admin_resolve_application_email", {
+        p_application_id: application.id,
+        p_canonical_email: form.elements.canonical_email.value,
+      });
+      if (error) throw error;
+      await loadData();
+      shell();
+      state.activeTab = "applications";
+      toast("Correct email saved. The application is unblocked.");
+    } catch (error) {
+      message.textContent = friendlyError(error);
+      message.className = "form-message error";
+      button.disabled = false;
+    }
+  });
+
+  panel.querySelector("[data-application-decision-form]")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const decision = form.elements.decision.value;
+    const message = form.querySelector("[data-application-message]");
+    const button = form.querySelector("button[type='submit']");
+    const confirmed = await confirmAction({
+      title: `${decision === "accepted" ? "Accept" : decision === "more_info" ? "Request more from" : "Decline"} ${application.public_name}?`,
+      body: "This records the decision and prepares a private email draft. It will not send an email.",
+      confirmLabel: "save decision",
+      danger: decision === "declined",
+    });
+    if (!confirmed) return;
+    button.disabled = true;
+    message.textContent = "saving decision...";
+    try {
+      const scoreValue = form.elements.score.value.trim();
+      const { error } = await supabase.rpc("ambassador_admin_decide_application", {
+        p_application_id: application.id,
+        p_decision: decision,
+        p_tier: form.elements.tier.value,
+        p_score: scoreValue ? Number(scoreValue) : null,
+        p_strengths: form.elements.strengths.value.trim(),
+        p_decision_note: form.elements.decision_note.value.trim(),
+        p_first_mission: form.elements.first_mission.value.trim(),
+        p_email_subject: form.elements.email_subject.value.trim() || null,
+        p_email_body: form.elements.email_body.value.trim() || null,
+      });
+      if (error) throw error;
+      await loadData();
+      shell();
+      state.activeTab = "applications";
+      toast("Decision saved and a private email draft is ready.");
+    } catch (error) {
+      message.textContent = friendlyError(error);
+      message.className = "form-message error";
+      button.disabled = false;
+    }
+  });
+}
+
+function renderIntegrations(panel) {
+  const primaryApplications = state.applications.filter((application) => !application.duplicate_of);
+  const linkedInvites = new Set(primaryApplications.map((application) => application.invite_id).filter(Boolean));
+  const conflicts = primaryApplications.filter((application) =>
+    ["email_conflict", "invalid_email"].includes(application.data_quality_status)
+  ).length;
+  const drafts = state.emailOutbox.filter((message) => message.status === "draft").length;
+  const failed = state.emailOutbox.filter((message) => ["failed", "bounced"].includes(message.status)).length;
+
+  panel.innerHTML = `
+    <section class="panel" aria-labelledby="integrations-title">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow">SYSTEM BOUNDARIES</p>
+          <h2 id="integrations-title">Integrations</h2>
+          <p>This page says what is connected, what is manual, and what is missing. A green label means verified operation—not a plan or assumption.</p>
+        </div>
+      </div>
+
+      <section class="integration-summary" aria-label="Integration coverage">
+        <article><strong>${state.applications.length}</strong><span>form responses staged</span></article>
+        <article><strong>${primaryApplications.length}</strong><span>unique people</span></article>
+        <article><strong>${linkedInvites.size}</strong><span>linked approved accounts</span></article>
+        <article class="${conflicts ? "attention" : ""}"><strong>${conflicts}</strong><span>identity holds</span></article>
+        <article class="${drafts ? "attention" : ""}"><strong>${drafts}</strong><span>email drafts waiting</span></article>
+        <article class="${failed ? "danger" : ""}"><strong>${failed}</strong><span>failed or bounced</span></article>
+      </section>
+
+      <div class="integration-grid">
+        ${state.integrationHealth.map(integrationCard).join("")}
+      </div>
+
+      <section class="detail-section integration-runs">
+        <h3>Recent sync evidence</h3>
+        ${state.syncRuns.length ? `
+          <div class="timeline">
+            ${state.syncRuns.map((run) => `
+              <article class="timeline-item">
+                <time>${formatDate(run.started_at, true)}</time>
+                <strong>${esc(run.integration_key)} · ${esc(run.status)}</strong>
+                <span>${run.source_count} source · ${run.conflict_count} conflicts · ${run.duplicate_count} repeats${run.error_message ? ` · ${esc(run.error_message)}` : ""}</span>
+              </article>
+            `).join("")}
+          </div>
+        ` : emptyQueue("No sync has been recorded.", "The form staging import has not run yet.")}
+      </section>
+
+      <section class="boundary-guide">
+        <article>
+          <span>CURRENT + MANUAL REFRESH</span>
+          <h3>Form → review staging</h3>
+          <p>All current form fields are retained, but the next Google Form row will not appear here until the operator sync runs. That remaining automation gap is intentionally visible.</p>
+        </article>
+        <article>
+          <span>CONNECTED + MANUAL SEND</span>
+          <h3>Decision → account → email draft</h3>
+          <p>Staff resolves identity problems, records a decision, and links or creates the approved account in one transaction. The system prepares a personal draft; IONOS send, delivery, replies, and bounces still need mailbox review.</p>
+        </article>
+        <article>
+          <span>NOT CONNECTED</span>
+          <h3>Reward → Shopify fulfillment</h3>
+          <p>Do not promise inventory or tracking from the ambassador dashboard yet. Product mapping, order creation, fulfillment, and tracking callbacks still need a controlled Shopify handoff.</p>
+        </article>
+      </section>
+    </section>
+  `;
+}
+
+function integrationCard(integration) {
+  const details = Object.entries(integration.details || {})
+    .map(([key, value]) => `<div><dt>${esc(key.replaceAll("_", " "))}</dt><dd>${esc(typeof value === "object" ? JSON.stringify(value) : value)}</dd></div>`)
+    .join("");
+  const sourceSheetLink = integration.integration_key === "google_forms" && integration.details?.sheet_id
+    ? linkButton(
+      "open live response sheet",
+      `https://docs.google.com/spreadsheets/d/${integration.details.sheet_id}/edit`,
+    )
+    : "";
+  return `
+    <article class="integration-card ${esc(integration.status)}">
+      <header>
+        <span class="pill ${esc(integration.status)}">${esc(integration.status.replaceAll("_", " "))}</span>
+        <time>checked ${formatDate(integration.last_checked_at, true)}</time>
+      </header>
+      <h3>${esc(integration.label)}</h3>
+      <p>${esc(integration.summary)}</p>
+      ${details ? `<dl>${details}</dl>` : ""}
+      ${sourceSheetLink}
+    </article>
+  `;
 }
 
 function reviewItems() {
